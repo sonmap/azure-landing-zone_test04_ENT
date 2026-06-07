@@ -5,6 +5,7 @@ Excel 설계서를 기준으로 Azure Landing Zone, 네트워크, 워크로드, 
 이 저장소는 학습 및 사전 검증용 템플릿입니다. 실제 운영 환경에 적용하기 전에는 보안 정책, 네트워크 주소, 권한 모델, 비용 정책, 삭제 방지 정책을 조직 기준에 맞게 검토해야 합니다.
 <img width="1536" height="1024" alt="ChatGPT Image Jun 8, 2026, 05_22_30 AM" src="https://github.com/user-attachments/assets/c7459b35-c009-4b6f-82b4-d631ff0d009a" />
 
+<img width="1055" height="1491" alt="ChatGPT Image Jun 8, 2026, 05_21_53 AM" src="https://github.com/user-attachments/assets/d5848b29-dcae-4713-a55c-0213a7b51532" />
 
 ## 목적
 
