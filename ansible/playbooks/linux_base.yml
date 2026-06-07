@@ -1,0 +1,6 @@
+---
+- name: Configure Linux base settings
+  hosts: all
+  become: true
+  roles:
+    - common

@@ -1,0 +1,10 @@
+tenant_id       = "00000000-0000-0000-0000-000000000000"
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "koreacentral"
+resource_group_name = "rg-sl-sales-dev"
+pe_name = "pe-stslssalesdev001-blob"
+subnet_id = "/subscriptions/.../subnets/snet-pe"
+private_connection_resource_id = "/subscriptions/.../storageAccounts/stslssalesdev001"
+subresource_names = ["blob"]
+private_dns_zone_ids = ["/subscriptions/.../privateDnsZones/privatelink.blob.core.windows.net"]
+common_tags = { env = "dev", department = "sales", itsm_ticket = "CSR-PE-001", managed_by = "terraform" }

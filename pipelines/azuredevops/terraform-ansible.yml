@@ -1,0 +1,53 @@
+trigger: none
+
+parameters:
+  - name: workingDirectory
+    type: string
+    default: live/30-services/webwas-sales-dev
+  - name: runAnsible
+    type: boolean
+    default: false
+
+stages:
+  - stage: Plan
+    jobs:
+      - job: TerraformPlan
+        pool:
+          name: SelfHostedPrivateAgents
+        steps:
+          - checkout: self
+          - script: |
+              cd ${{ parameters.workingDirectory }}
+              terraform init
+              terraform plan -out=tfplan
+            displayName: Terraform plan
+
+  - stage: Apply
+    dependsOn: Plan
+    jobs:
+      - deployment: TerraformApply
+        environment: terraform-apply-approval
+        pool:
+          name: SelfHostedPrivateAgents
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - script: |
+                    cd ${{ parameters.workingDirectory }}
+                    terraform init
+                    terraform apply -auto-approve
+                  displayName: Terraform apply
+                - script: |
+                    cd ${{ parameters.workingDirectory }}
+                    terraform output -json > tf_output.json
+                    python ../../../tools/tf_output_to_ansible_inventory.py --input tf_output.json --out ../../../ansible/inventories/generated/runtime.ini
+                  condition: eq('${{ parameters.runAnsible }}', true)
+                  displayName: Generate Ansible inventory
+                - script: |
+                    cd ansible
+                    ansible-playbook -i inventories/generated/runtime.ini playbooks/linux_base.yml
+                    ansible-playbook -i inventories/generated/runtime.ini playbooks/tomcat_install.yml
+                  condition: eq('${{ parameters.runAnsible }}', true)
+                  displayName: Run Ansible

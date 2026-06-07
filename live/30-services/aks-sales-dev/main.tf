@@ -1,0 +1,10 @@
+data "azurerm_subnet" "aks" { name=var.aks_subnet_name virtual_network_name=var.vnet_name resource_group_name=var.vnet_resource_group_name }
+resource "azurerm_kubernetes_cluster" "this" {
+  name=var.cluster.name location=var.location resource_group_name=var.resource_group_name dns_prefix=var.cluster.dns_prefix kubernetes_version=var.cluster.kubernetes_version private_cluster_enabled=var.cluster.private_cluster_enabled sku_tier=var.cluster.sku_tier local_account_disabled=var.cluster.local_account_disabled
+  default_node_pool { name=var.default_node_pool.name vm_size=var.default_node_pool.vm_size vnet_subnet_id=data.azurerm_subnet.aks.id node_count=var.default_node_pool.auto_scaling_enabled?null:var.default_node_pool.node_count auto_scaling_enabled=var.default_node_pool.auto_scaling_enabled min_count=var.default_node_pool.auto_scaling_enabled?var.default_node_pool.min_count:null max_count=var.default_node_pool.auto_scaling_enabled?var.default_node_pool.max_count:null os_disk_size_gb=var.default_node_pool.os_disk_size_gb }
+  identity { type="SystemAssigned" }
+  network_profile { network_plugin=var.network_profile.network_plugin network_policy=var.network_profile.network_policy service_cidr=var.network_profile.service_cidr dns_service_ip=var.network_profile.dns_service_ip outbound_type=var.network_profile.outbound_type }
+  dynamic "oms_agent" { for_each=var.monitoring.enabled?[1]:[] content { log_analytics_workspace_id=var.monitoring.log_analytics_workspace_id } }
+  tags=var.tags
+}
+resource "azurerm_kubernetes_cluster_node_pool" "user" { for_each=var.user_node_pools name=each.value.name kubernetes_cluster_id=azurerm_kubernetes_cluster.this.id vm_size=each.value.vm_size mode=each.value.mode vnet_subnet_id=data.azurerm_subnet.aks.id node_count=each.value.auto_scaling_enabled?null:each.value.node_count auto_scaling_enabled=each.value.auto_scaling_enabled min_count=each.value.auto_scaling_enabled?each.value.min_count:null max_count=each.value.auto_scaling_enabled?each.value.max_count:null os_disk_size_gb=each.value.os_disk_size_gb tags=merge(var.tags,{node_pool=each.key}) }

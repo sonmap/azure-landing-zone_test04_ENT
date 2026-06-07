@@ -1,0 +1,15 @@
+tenant_id           = "00000000-0000-0000-0000-000000000000"
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+location            = "koreacentral"
+resource_group_name = "rg-sl-sales-dev"
+subnet_id           = "/subscriptions/.../subnets/snet-was"
+vm_name             = "vm-sl-sales-dev-was01"
+vm_size             = "Standard_D4s_v5"
+admin_username      = "azureuser"
+ssh_public_key      = "ssh-rsa REPLACE_ME"
+os_disk_size_gb     = 128
+common_tags = { env = "dev", department = "sales", owner = "sales-it", costcenter = "CC10020", data_class = "internal", itsm_ticket = "CSR-VM-001", role = "was", managed_by = "terraform" }
+data_disks = {
+  app = { size_gb = 128, lun = 0 }
+  log = { size_gb = 256, lun = 1 }
+}

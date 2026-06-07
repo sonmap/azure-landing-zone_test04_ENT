@@ -1,0 +1,17 @@
+tenant_id           = "00000000-0000-0000-0000-000000000000"
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+location            = "koreacentral"
+resource_group_name = "rg-sl-sales-dev"
+aks_name            = "aks-sl-sales-dev"
+dns_prefix          = "aks-sl-sales-dev"
+subnet_id           = "/subscriptions/.../subnets/snet-aks"
+service_cidr        = "10.250.0.0/16"
+dns_service_ip      = "10.250.0.10"
+log_analytics_workspace_id = "/subscriptions/.../providers/Microsoft.OperationalInsights/workspaces/law-sl-platform"
+admin_group_object_ids = ["00000000-0000-0000-0000-000000000000"]
+acr_name = "acrslssalesdev001"
+common_tags = { env = "dev", department = "sales", owner = "devops", costcenter = "CC10020", data_class = "internal", itsm_ticket = "CSR-AKS-001", managed_by = "terraform" }
+default_node_pool = { name = "system", vm_size = "Standard_D4s_v5", min_count = 2, max_count = 5, os_disk_size_gb = 128 }
+user_node_pools = {
+  app = { name = "app", vm_size = "Standard_D4s_v5", min_count = 1, max_count = 5, os_disk_size_gb = 128 }
+}

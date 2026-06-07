@@ -1,0 +1,16 @@
+tenant_id           = "00000000-0000-0000-0000-000000000000"
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+resource_group_name = "rg-sl-hub-krc"
+zones = [
+  "privatelink.openai.azure.com",
+  "privatelink.search.windows.net",
+  "privatelink.blob.core.windows.net",
+  "privatelink.vaultcore.azure.net"
+]
+virtual_network_links = {
+  openai_hub   = { zone_name = "privatelink.openai.azure.com", name = "link-vnet-sl-hub-krc", virtual_network_id = "/subscriptions/.../virtualNetworks/vnet-sl-hub-krc" }
+  search_hub   = { zone_name = "privatelink.search.windows.net", name = "link-vnet-sl-hub-krc", virtual_network_id = "/subscriptions/.../virtualNetworks/vnet-sl-hub-krc" }
+  blob_hub     = { zone_name = "privatelink.blob.core.windows.net", name = "link-vnet-sl-hub-krc", virtual_network_id = "/subscriptions/.../virtualNetworks/vnet-sl-hub-krc" }
+  keyvault_hub = { zone_name = "privatelink.vaultcore.azure.net", name = "link-vnet-sl-hub-krc", virtual_network_id = "/subscriptions/.../virtualNetworks/vnet-sl-hub-krc" }
+}
+common_tags = { env = "platform", department = "network", managed_by = "terraform", itsm_ticket = "CSR-PRIVATE-DNS" }

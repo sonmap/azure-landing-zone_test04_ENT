@@ -1,0 +1,5 @@
+resource_group_name  = "<TFSTATE_RESOURCE_GROUP>"
+storage_account_name = "<STORAGE_ACCOUNT_NAME>"
+container_name       = "tfstate"
+key                  = "<STATE_KEY>"
+use_azuread_auth     = true

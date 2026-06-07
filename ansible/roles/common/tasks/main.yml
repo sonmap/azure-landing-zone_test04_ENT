@@ -1,0 +1,19 @@
+---
+- name: Set timezone
+  timezone:
+    name: Asia/Seoul
+
+- name: Install base packages
+  package:
+    name:
+      - chrony
+      - unzip
+      - curl
+      - vim
+    state: present
+
+- name: Enable chrony
+  service:
+    name: chronyd
+    state: started
+    enabled: true

@@ -1,0 +1,20 @@
+tenant_id           = "00000000-0000-0000-0000-000000000000"
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+location            = "koreacentral"
+resource_group_name = "rg-sl-sales-dev"
+spoke_name          = "vnet-sl-sales-dev"
+address_space       = ["10.40.0.0/20"]
+dns_servers         = ["10.39.1.4"]
+hub_vnet_id         = "/subscriptions/.../resourceGroups/rg-sl-hub-krc/providers/Microsoft.Network/virtualNetworks/vnet-sl-hub-krc"
+hub_resource_group_name = "rg-sl-hub-krc"
+hub_vnet_name           = "vnet-sl-hub-krc"
+firewall_private_ip = "10.39.0.68"
+common_tags = { env = "dev", department = "sales", costcenter = "CC10020", managed_by = "terraform", itsm_ticket = "CSR-SPOKE" }
+subnets = {
+  web   = { name = "snet-web", address_prefixes = ["10.40.1.0/24"] }
+  was   = { name = "snet-was", address_prefixes = ["10.40.2.0/24"] }
+  db    = { name = "snet-db", address_prefixes = ["10.40.3.0/24"] }
+  aks   = { name = "snet-aks", address_prefixes = ["10.40.4.0/23"] }
+  pe    = { name = "snet-pe", address_prefixes = ["10.40.6.0/24"], private_endpoint_network_policies = "Disabled" }
+  agent = { name = "snet-devops-agent", address_prefixes = ["10.40.7.0/24"] }
+}

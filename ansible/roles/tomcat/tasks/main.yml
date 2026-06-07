@@ -1,0 +1,28 @@
+---
+- name: Install Java
+  package:
+    name: java-17-openjdk
+    state: present
+
+- name: Create tomcat user
+  user:
+    name: tomcat
+    system: true
+    shell: /sbin/nologin
+
+- name: Create app directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: tomcat
+    group: tomcat
+    mode: "0755"
+  loop:
+    - /APP
+    - /APP/tomcat
+    - /APP/backup
+    - /APP/logs
+
+- name: Tomcat install placeholder
+  debug:
+    msg: "Tomcat binary deployment should be added here from internal artifact repository."

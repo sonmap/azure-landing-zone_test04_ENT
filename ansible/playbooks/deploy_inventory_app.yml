@@ -1,0 +1,138 @@
+---
+- name: Deploy sample inventory API to AP servers
+  hosts: app
+  become: true
+
+  vars:
+    app_name: inventory-api
+    app_user: tomcat
+    app_group: tomcat
+    tomcat_home: /APP/tomcat
+    app_port: 8080
+    db_host: 10.50.3.11
+    db_port: 1433
+    db_name: inventorydb
+    mount_point: /APP
+    data_device: /dev/sdb
+    data_partition: /dev/sdb1
+
+  tasks:
+    - name: Install packages
+      package:
+        name:
+          - java-17-openjdk
+          - curl
+          - unzip
+          - xfsprogs
+        state: present
+
+    - name: Create tomcat user
+      user:
+        name: "{{ app_user }}"
+        shell: /sbin/nologin
+        create_home: false
+
+    - name: Create APP directory
+      file:
+        path: "{{ mount_point }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0755"
+
+    - name: Check data disk exists
+      stat:
+        path: "{{ data_device }}"
+      register: data_disk
+
+    - name: Partition data disk
+      community.general.parted:
+        device: "{{ data_device }}"
+        number: 1
+        state: present
+        fs_type: xfs
+        part_start: "0%"
+        part_end: "100%"
+      when: data_disk.stat.exists
+
+    - name: Create filesystem
+      filesystem:
+        fstype: xfs
+        dev: "{{ data_partition }}"
+      when: data_disk.stat.exists
+
+    - name: Mount APP filesystem
+      mount:
+        path: "{{ mount_point }}"
+        src: "{{ data_partition }}"
+        fstype: xfs
+        state: mounted
+      when: data_disk.stat.exists
+
+    - name: Create Tomcat home
+      file:
+        path: "{{ tomcat_home }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0755"
+
+    - name: Create sample application directory
+      file:
+        path: "{{ tomcat_home }}/webapps/{{ app_name }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0755"
+
+    - name: Create sample health page
+      copy:
+        dest: "{{ tomcat_home }}/webapps/{{ app_name }}/health.json"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0644"
+        content: |
+          {
+            "status": "UP",
+            "app": "{{ app_name }}",
+            "db_host": "{{ db_host }}",
+            "db_port": "{{ db_port }}",
+            "db_name": "{{ db_name }}"
+          }
+
+    - name: Create simple Python HTTP service
+      copy:
+        dest: /etc/systemd/system/inventory-api.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Sample Inventory API
+          After=network.target
+
+          [Service]
+          Type=simple
+          WorkingDirectory={{ tomcat_home }}/webapps/{{ app_name }}
+          ExecStart=/usr/bin/python3 -m http.server {{ app_port }}
+          Restart=always
+          User={{ app_user }}
+          Group={{ app_group }}
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start sample inventory API
+      systemd:
+        name: inventory-api
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
+    - name: Health check
+      uri:
+        url: "http://localhost:{{ app_port }}/health.json"
+        status_code: 200
+      register: health
+
+    - name: Show health result
+      debug:
+        var: health.status

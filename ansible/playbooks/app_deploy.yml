@@ -1,0 +1,33 @@
+---
+- name: Deploy application artifact to WAS
+  hosts: was
+  become: true
+  serial: 1
+  vars:
+    app_name: sample-app
+    artifact_path: files/sample-app.war
+    tomcat_webapps: /APP/tomcat/webapps
+  tasks:
+    - name: Stop tomcat if service exists
+      systemd:
+        name: tomcat
+        state: stopped
+      ignore_errors: true
+
+    - name: Backup existing artifact
+      shell: |
+        mkdir -p /APP/backup/{{ app_name }}
+        if [ -f {{ tomcat_webapps }}/{{ app_name }}.war ]; then
+          cp -p {{ tomcat_webapps }}/{{ app_name }}.war /APP/backup/{{ app_name }}/{{ app_name }}_$(date +%Y%m%d_%H%M%S).war
+        fi
+      changed_when: false
+
+    - name: Copy artifact placeholder
+      debug:
+        msg: "Copy {{ artifact_path }} to {{ tomcat_webapps }}/{{ app_name }}.war in real pipeline."
+
+    - name: Start tomcat if service exists
+      systemd:
+        name: tomcat
+        state: started
+      ignore_errors: true

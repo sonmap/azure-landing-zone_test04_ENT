@@ -1,0 +1,15 @@
+tenant_id       = "00000000-0000-0000-0000-000000000000"
+subscription_id = "00000000-0000-0000-0000-000000000000"
+location        = "koreacentral"
+resource_group_name = "rg-sl-sales-ai-sandbox"
+private_endpoint_subnet_id = "/subscriptions/.../subnets/snet-pe"
+openai_name = "oai-sl-sales-sbox-001"
+openai_custom_subdomain_name = "oai-sl-sales-sbox-001"
+search_name = "srch-sl-sales-sbox-001"
+storage_name = "stslssalesaisbox001"
+key_vault_name = "kv-sl-sales-sbox-001"
+openai_private_dns_zone_ids = ["/subscriptions/.../privateDnsZones/privatelink.openai.azure.com"]
+search_private_dns_zone_ids = ["/subscriptions/.../privateDnsZones/privatelink.search.windows.net"]
+blob_private_dns_zone_ids = ["/subscriptions/.../privateDnsZones/privatelink.blob.core.windows.net"]
+keyvault_private_dns_zone_ids = ["/subscriptions/.../privateDnsZones/privatelink.vaultcore.azure.net"]
+common_tags = { env = "sandbox", department = "sales", owner = "ai-platform", costcenter = "CC10020", data_class = "internal", itsm_ticket = "CSR-AI-001", managed_by = "terraform" }
