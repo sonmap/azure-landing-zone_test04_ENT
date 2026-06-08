@@ -175,6 +175,38 @@ Git 업로드 전 수행한 정리 기준은 다음과 같습니다.
 
 ## 사전 준비
 
+erraform backend 저장소를 다시 만듭니다. 전체 자원을 삭제했다면 이 작업이 필요합니다.
+
+az group create \
+  --name rg-sl-tfstate-krc \
+  --location koreacentral
+az storage account create \
+  --name stslztfstate18fbfa69 \
+  --resource-group rg-sl-tfstate-krc \
+  --location koreacentral \
+  --sku Standard_LRS \
+  --kind StorageV2
+sub=$(az account show --query id -o tsv)
+
+az rest --method put \
+  --url "https://management.azure.com/subscriptions/$sub/resourceGroups/rg-sl-tfstate-krc/providers/Microsoft.Storage/storageAccounts/stslztfstate18fbfa69/blobServices/default/containers/tfstate?api-version=2023-01-01" \
+  --body "{}"
+현재 사용자에게 backend 권한을 줍니다.
+
+scope=$(az storage account show \
+  -g rg-sl-tfstate-krc \
+  -n stslztfstate18fbfa69 \
+  --query id -o tsv)
+
+oid=$(az ad signed-in-user show --query id -o tsv)
+
+az role assignment create \
+  --assignee-object-id "$oid" \
+  --assignee-principal-type User \
+  --role "Storage Blob Data Contributor" \
+  --scope "$scope"
+
+
 Linux 서버에서 실행하는 것을 기준으로 합니다.
 
 ```bash
