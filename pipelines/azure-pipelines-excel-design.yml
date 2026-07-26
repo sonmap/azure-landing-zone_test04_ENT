@@ -1,0 +1,364 @@
+trigger: none
+pr: none
+
+parameters:
+- name: agentPool
+  displayName: Self-hosted agent pool
+  type: string
+  default: son-linux-pool
+
+- name: excelSecureFile
+  displayName: Excel design Secure File name
+  type: string
+  default: azure_landingzone_design.xlsx
+
+- name: selectedRoot
+  displayName: Terraform root to plan/apply (all or relative root)
+  type: string
+  default: all
+
+- name: runTerraformPlan
+  displayName: Run Terraform plan
+  type: boolean
+  default: true
+
+- name: runTerraformApply
+  displayName: Apply the reviewed Terraform plans
+  type: boolean
+  default: false
+
+- name: allowDestroy
+  displayName: Allow delete/replace actions in Terraform plan
+  type: boolean
+  default: false
+
+- name: applyEnvironment
+  displayName: Azure DevOps Environment for approval
+  type: string
+  default: azlz-terraform-apply
+
+variables:
+- group: azlz-excel-design
+- name: generatedArtifact
+  value: generated-tfvars
+- name: planArtifact
+  value: terraform-plans
+
+pool:
+  name: ${{ parameters.agentPool }}
+
+stages:
+- stage: Generate
+  displayName: Validate Excel and generate auto tfvars
+  jobs:
+  - job: GenerateTfvars
+    displayName: Generate 10-design.auto.tfvars.json
+    steps:
+    - checkout: self
+      clean: true
+
+    - task: DownloadSecureFile@1
+      name: designExcel
+      displayName: Download Excel design
+      inputs:
+        secureFile: ${{ parameters.excelSecureFile }}
+
+    - bash: |
+        set -euo pipefail
+        python3 --version
+        python3 -m venv "$(Agent.TempDirectory)/azlz-excel-venv"
+        "$(Agent.TempDirectory)/azlz-excel-venv/bin/python" -m pip install --upgrade pip
+        "$(Agent.TempDirectory)/azlz-excel-venv/bin/python" -m pip install openpyxl
+      displayName: Prepare Python environment
+
+    - bash: |
+        set -euo pipefail
+        rm -rf "$(Build.ArtifactStagingDirectory)/generated_tfvars"
+
+        "$(Agent.TempDirectory)/azlz-excel-venv/bin/python" \
+          tools/excel_design_to_auto_tfvars.py \
+          --excel "$(designExcel.secureFilePath)" \
+          --out "$(Build.ArtifactStagingDirectory)/generated_tfvars" \
+          --clean
+
+        cd "$(Build.ArtifactStagingDirectory)/generated_tfvars"
+        find . -type f -name '10-design.auto.tfvars.json' \
+          -printf '%h\n' \
+          | sed 's#^\./##' \
+          | sort -u > roots.txt
+
+        test -s roots.txt
+        echo "Generated Terraform roots:"
+        cat roots.txt
+      displayName: Generate root-specific tfvars
+      env:
+        TENANT_ID: $(TENANT_ID)
+        SUBSCRIPTION_ID: $(SUBSCRIPTION_ID)
+        SSH_PUBLIC_KEY: $(SSH_PUBLIC_KEY)
+
+    - bash: |
+        set -euo pipefail
+        "$(Agent.TempDirectory)/azlz-excel-venv/bin/python" - <<'PY'
+        import json
+        from pathlib import Path
+
+        root = Path("$(Build.ArtifactStagingDirectory)/generated_tfvars")
+        files = sorted(root.rglob("10-design.auto.tfvars.json"))
+        if not files:
+            raise SystemExit("No generated tfvars files found")
+        for path in files:
+            json.loads(path.read_text(encoding="utf-8"))
+            print(f"valid JSON: {path.relative_to(root)}")
+        PY
+      displayName: Validate generated JSON
+
+    - task: PublishPipelineArtifact@1
+      displayName: Publish generated tfvars artifact
+      inputs:
+        targetPath: $(Build.ArtifactStagingDirectory)/generated_tfvars
+        artifact: $(generatedArtifact)
+
+- stage: Validate
+  displayName: Terraform format and validate
+  dependsOn: Generate
+  jobs:
+  - job: TerraformValidate
+    displayName: Validate generated Terraform roots
+    steps:
+    - checkout: self
+      clean: true
+
+    - download: current
+      artifact: $(generatedArtifact)
+
+    - bash: |
+        set -euo pipefail
+        terraform version
+        artifact_root="$(Pipeline.Workspace)/$(generatedArtifact)"
+
+        while IFS= read -r rel; do
+          test -n "$rel" || continue
+          src="$artifact_root/$rel/10-design.auto.tfvars.json"
+          dst="$(Build.SourcesDirectory)/live/$rel/10-design.auto.tfvars.json"
+          test -f "$src"
+          mkdir -p "$(dirname "$dst")"
+          cp "$src" "$dst"
+
+          root="$(dirname "$dst")"
+          echo "============================================================"
+          echo "Validating $root"
+          terraform -chdir="$root" fmt -check -diff
+          terraform -chdir="$root" init -backend=false -input=false
+          terraform -chdir="$root" validate
+        done < "$artifact_root/roots.txt"
+      displayName: Terraform init and validate
+
+- ${{ if or(eq(parameters.runTerraformPlan, true), eq(parameters.runTerraformApply, true)) }}:
+  - stage: Plan
+    displayName: Terraform plan
+    dependsOn: Validate
+    jobs:
+    - job: TerraformPlan
+      displayName: Create reviewed Terraform plans
+      steps:
+      - checkout: self
+        clean: true
+
+      - download: current
+        artifact: $(generatedArtifact)
+
+      - bash: |
+          set -euo pipefail
+          artifact_root="$(Pipeline.Workspace)/$(generatedArtifact)"
+          while IFS= read -r rel; do
+            test -n "$rel" || continue
+            src="$artifact_root/$rel/10-design.auto.tfvars.json"
+            dst="$(Build.SourcesDirectory)/live/$rel/10-design.auto.tfvars.json"
+            mkdir -p "$(dirname "$dst")"
+            cp "$src" "$dst"
+          done < "$artifact_root/roots.txt"
+        displayName: Restore generated tfvars into live roots
+
+      - task: AzureCLI@2
+        displayName: Terraform plan with Azure service connection
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: bash
+          scriptLocation: inlineScript
+          addSpnToEnvironment: true
+          inlineScript: |
+            set -euo pipefail
+
+            export ARM_CLIENT_ID="$servicePrincipalId"
+            export ARM_TENANT_ID="$tenantId"
+            export ARM_SUBSCRIPTION_ID="$(SUBSCRIPTION_ID)"
+            if [[ -n "${servicePrincipalKey:-}" ]]; then
+              export ARM_CLIENT_SECRET="$servicePrincipalKey"
+            fi
+            if [[ -n "${idToken:-}" ]]; then
+              export ARM_OIDC_TOKEN="$idToken"
+              export ARM_USE_OIDC=true
+            fi
+            export ARM_USE_AZUREAD=true
+
+            artifact_root="$(Pipeline.Workspace)/$(generatedArtifact)"
+            plan_root="$(Build.ArtifactStagingDirectory)/plans"
+            selected_root='${{ parameters.selectedRoot }}'
+            allow_destroy="$(printf '%s' '${{ parameters.allowDestroy }}' | tr '[:upper:]' '[:lower:]')"
+
+            mkdir -p "$plan_root"
+            : > "$plan_root/roots.txt"
+            terraform version > "$plan_root/terraform-version.txt"
+
+            while IFS= read -r rel; do
+              test -n "$rel" || continue
+              if [[ "$selected_root" != "all" && "$rel" != "$selected_root" ]]; then
+                continue
+              fi
+
+              echo "$rel" >> "$plan_root/roots.txt"
+              root="$(Build.SourcesDirectory)/live/$rel"
+              plan_dir="$plan_root/$rel"
+              plan_file="$plan_dir/tfplan"
+              plan_json="$plan_dir/tfplan.json"
+              mkdir -p "$plan_dir"
+
+              state_key="${rel}.tfstate"
+              echo "============================================================"
+              echo "Planning $root"
+              echo "Backend key: $state_key"
+
+              terraform -chdir="$root" init -reconfigure -input=false \
+                -backend-config="resource_group_name=$(TFSTATE_RESOURCE_GROUP)" \
+                -backend-config="storage_account_name=$(TFSTATE_STORAGE_ACCOUNT)" \
+                -backend-config="container_name=$(TFSTATE_CONTAINER)" \
+                -backend-config="key=$state_key" \
+                -backend-config="use_azuread_auth=true"
+
+              terraform -chdir="$root" plan -input=false -out="$plan_file"
+              terraform -chdir="$root" show -no-color "$plan_file" > "$plan_file.txt"
+              terraform -chdir="$root" show -json "$plan_file" > "$plan_json"
+
+              python3 - "$plan_json" "$allow_destroy" <<'PY'
+            import json
+            import sys
+            from pathlib import Path
+
+            plan_path = Path(sys.argv[1])
+            allow_destroy = sys.argv[2] == "true"
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            destructive = []
+            for change in plan.get("resource_changes", []):
+                actions = change.get("change", {}).get("actions", [])
+                if "delete" in actions:
+                    destructive.append(
+                        f"{change.get('address')}: {','.join(actions)}"
+                    )
+
+            if destructive:
+                print("Destructive Terraform actions:")
+                for item in destructive:
+                    print(f" - {item}")
+                if not allow_destroy:
+                    raise SystemExit(
+                        "Delete/replace actions are blocked. "
+                        "Review the Excel change and rerun with allowDestroy=true."
+                    )
+            PY
+            done < "$artifact_root/roots.txt"
+
+            test -s "$plan_root/roots.txt" || {
+              echo "selectedRoot did not match any generated root: $selected_root" >&2
+              exit 2
+            }
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish Terraform plan artifact
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/plans
+          artifact: $(planArtifact)
+
+- ${{ if eq(parameters.runTerraformApply, true) }}:
+  - stage: Apply
+    displayName: Approved Terraform apply
+    dependsOn: Plan
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+    - deployment: TerraformApply
+      displayName: Apply reviewed Terraform plans
+      environment: ${{ parameters.applyEnvironment }}
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+            - checkout: self
+              clean: true
+
+            - download: current
+              artifact: $(generatedArtifact)
+
+            - download: current
+              artifact: $(planArtifact)
+
+            - bash: |
+                set -euo pipefail
+                artifact_root="$(Pipeline.Workspace)/$(generatedArtifact)"
+                while IFS= read -r rel; do
+                  test -n "$rel" || continue
+                  src="$artifact_root/$rel/10-design.auto.tfvars.json"
+                  dst="$(Build.SourcesDirectory)/live/$rel/10-design.auto.tfvars.json"
+                  mkdir -p "$(dirname "$dst")"
+                  cp "$src" "$dst"
+                done < "$(Pipeline.Workspace)/$(planArtifact)/roots.txt"
+              displayName: Restore reviewed tfvars
+
+            - task: AzureCLI@2
+              displayName: Terraform apply
+              inputs:
+                azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                scriptType: bash
+                scriptLocation: inlineScript
+                addSpnToEnvironment: true
+                inlineScript: |
+                  set -euo pipefail
+
+                  export ARM_CLIENT_ID="$servicePrincipalId"
+                  export ARM_TENANT_ID="$tenantId"
+                  export ARM_SUBSCRIPTION_ID="$(SUBSCRIPTION_ID)"
+                  if [[ -n "${servicePrincipalKey:-}" ]]; then
+                    export ARM_CLIENT_SECRET="$servicePrincipalKey"
+                  fi
+                  if [[ -n "${idToken:-}" ]]; then
+                    export ARM_OIDC_TOKEN="$idToken"
+                    export ARM_USE_OIDC=true
+                  fi
+                  export ARM_USE_AZUREAD=true
+
+                  plan_root="$(Pipeline.Workspace)/$(planArtifact)"
+                  expected_version="$(cat "$plan_root/terraform-version.txt")"
+                  current_version="$(terraform version)"
+                  if [[ "$current_version" != "$expected_version" ]]; then
+                    echo "Terraform version changed between plan and apply." >&2
+                    diff -u <(printf '%s\n' "$expected_version") <(printf '%s\n' "$current_version") || true
+                    exit 1
+                  fi
+
+                  while IFS= read -r rel; do
+                    test -n "$rel" || continue
+                    root="$(Build.SourcesDirectory)/live/$rel"
+                    plan_file="$plan_root/$rel/tfplan"
+                    state_key="${rel}.tfstate"
+                    test -f "$plan_file"
+
+                    echo "============================================================"
+                    echo "Applying reviewed plan for $root"
+
+                    terraform -chdir="$root" init -reconfigure -input=false \
+                      -backend-config="resource_group_name=$(TFSTATE_RESOURCE_GROUP)" \
+                      -backend-config="storage_account_name=$(TFSTATE_STORAGE_ACCOUNT)" \
+                      -backend-config="container_name=$(TFSTATE_CONTAINER)" \
+                      -backend-config="key=$state_key" \
+                      -backend-config="use_azuread_auth=true"
+
+                    terraform -chdir="$root" apply -input=false "$plan_file"
+                  done < "$plan_root/roots.txt"
