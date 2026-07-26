@@ -149,7 +149,39 @@ tools/tf_root.sh live/30-services/vm-sales-dev plan
 
 삭제 대상이 보이면 Excel 행 삭제 또는 ID 변경이 의도한 것인지 먼저 확인합니다.
 
-## 7. 신규 업무 추가
+## 7. Azure DevOps Pipeline
+
+Azure DevOps Services에서는 다음 YAML을 사용합니다.
+
+```text
+pipelines/azure-pipelines-excel-design.yml
+```
+
+실제 Excel은 Git이 아니라 Azure DevOps Library의 Secure Files에 등록합니다. 파이프라인은 Secure File을 내려받아 JSON을 생성하고, Terraform Validate와 Plan을 수행한 뒤 Azure DevOps Environment 승인 후 Apply할 수 있습니다.
+
+상세 설정은 다음 문서를 참고합니다.
+
+```text
+docs/AZURE_DEVOPS_EXCEL_PIPELINE.md
+```
+
+주요 안전 기본값:
+
+```text
+runTerraformApply = false
+allowDestroy      = false
+```
+
+최초 구축 Apply는 다음 순서로 `selectedRoot`를 하나씩 지정합니다.
+
+```text
+00-foundation/resource-groups
+10-platform/hub-network
+20-workload/sales-dev-spoke
+30-services/vm-sales-dev
+```
+
+## 8. 신규 업무 추가
 
 예를 들어 `inventory-preprod`를 추가할 경우:
 
@@ -166,7 +198,7 @@ tools/tf_root.sh live/30-services/vm-sales-dev plan
 
 그 후 변환기를 다시 실행하면 새 Root의 `10-design.auto.tfvars.json`이 생성됩니다.
 
-## 8. 현재 지원 범위
+## 9. 현재 지원 범위
 
 초기 전환 버전은 다음 Module Type을 지원합니다.
 
@@ -179,10 +211,11 @@ vm
 
 이후 AKS, AI, Load Balancer, Private DNS, Private Endpoint, Firewall Rule을 같은 `99_GenerationMap` 방식으로 확장합니다.
 
-## 9. 안전 원칙
+## 10. 안전 원칙
 
 - Excel은 설계 원본이며 생성된 JSON을 직접 수정하지 않습니다.
 - 실제 Excel과 생성 JSON은 공개 Git에 커밋하지 않습니다.
 - `generated_tfvars`에서 먼저 검토하고 `live`에 반영합니다.
 - `terraform validate`와 `terraform plan` 없이 apply하지 않습니다.
 - Excel의 ID 또는 행 삭제는 Terraform destroy로 이어질 수 있으므로 plan의 삭제 항목을 승인 전에 반드시 확인합니다.
+- Azure DevOps Apply는 main 브랜치와 승인 Environment에서만 수행합니다.
