@@ -45,7 +45,7 @@ variables:
   value: terraform-plans
 
 pool:
-  name: ${{ parameters.agentPool }}
+  name: son-linux-pool
 
 stages:
 - stage: Generate
