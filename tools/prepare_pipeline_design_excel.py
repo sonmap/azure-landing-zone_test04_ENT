@@ -25,6 +25,13 @@ REQUIRED_SHEETS = {
     "06_WorkloadSubnets",
     "07_VMs",
     "08_VMDisks",
+    "09_PrivateDNSZones",
+    "10_PrivateDNSLinks",
+    "11_PrivateEndpoints",
+    "12_FirewallRuleGroups",
+    "13_FirewallNetworkRules",
+    "14_FirewallApplicationRules",
+    "15_DNSRecords",
     "99_GenerationMap",
 }
 
