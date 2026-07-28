@@ -82,6 +82,7 @@ if ! az storage account show \
     --https-only true \
     --min-tls-version TLS1_2 \
     --allow-blob-public-access false \
+    --allow-shared-key-access false \
     --public-network-access Enabled \
     --tags managed-by=azure-devops purpose=terraform-state \
     --output none
