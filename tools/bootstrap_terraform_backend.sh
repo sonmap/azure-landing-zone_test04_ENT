@@ -14,7 +14,6 @@ require_env() {
 }
 
 for name in \
-  ARM_CLIENT_ID \
   ARM_SUBSCRIPTION_ID \
   TFSTATE_RESOURCE_GROUP \
   TFSTATE_STORAGE_ACCOUNT \
@@ -38,6 +37,34 @@ fi
 
 az account set --subscription "$ARM_SUBSCRIPTION_ID"
 
+principal_object_id="$(
+  az account get-access-token \
+    --resource https://management.azure.com/ \
+    --query accessToken \
+    --output tsv \
+  | python3 -c '
+import base64
+import json
+import sys
+
+token = sys.stdin.read().strip()
+parts = token.split(".")
+if len(parts) < 2:
+    raise SystemExit("Azure access token is not a JWT")
+payload = parts[1] + "=" * (-len(parts[1]) % 4)
+claims = json.loads(base64.urlsafe_b64decode(payload.encode()).decode())
+oid = claims.get("oid")
+if not oid:
+    raise SystemExit("Azure access token does not contain an oid claim")
+print(oid)
+'
+)"
+
+if [[ -z "$principal_object_id" ]]; then
+  echo "Could not determine the Azure Service Connection principal object ID." >&2
+  exit 2
+fi
+
 echo "Terraform backend configuration"
 echo "  subscription: $ARM_SUBSCRIPTION_ID"
 echo "  resource group: $TFSTATE_RESOURCE_GROUP"
@@ -46,6 +73,7 @@ echo "  container: $TFSTATE_CONTAINER"
 echo "  location: $TFSTATE_LOCATION"
 echo "  create missing resources: $BOOTSTRAP_CREATE"
 echo "  grant backend role: $GRANT_BACKEND_ROLE"
+echo "  service connection object ID: $principal_object_id"
 
 if ! az group show --name "$TFSTATE_RESOURCE_GROUP" >/dev/null 2>&1; then
   if [[ "$BOOTSTRAP_CREATE" != "true" ]]; then
@@ -119,7 +147,8 @@ role_name="Storage Blob Data Contributor"
 if [[ "$GRANT_BACKEND_ROLE" == "true" ]]; then
   role_count="$(
     az role assignment list \
-      --assignee "$ARM_CLIENT_ID" \
+      --assignee-object-id "$principal_object_id" \
+      --fill-principal-name false \
       --scope "$storage_id" \
       --include-inherited \
       --role "$role_name" \
@@ -131,7 +160,8 @@ if [[ "$GRANT_BACKEND_ROLE" == "true" ]]; then
     echo "Granting '$role_name' to service connection identity."
     role_output="$(
       az role assignment create \
-        --assignee "$ARM_CLIENT_ID" \
+        --assignee-object-id "$principal_object_id" \
+        --assignee-principal-type ServicePrincipal \
         --role "$role_name" \
         --scope "$storage_id" \
         --output none 2>&1
@@ -140,7 +170,7 @@ if [[ "$GRANT_BACKEND_ROLE" == "true" ]]; then
         echo "Role assignment already exists."
       else
         echo "$role_output" >&2
-        echo "The service connection needs Owner or User Access Administrator to create the backend role assignment." >&2
+        echo "The service connection needs Owner, User Access Administrator, or Role Based Access Control Administrator to create the backend role assignment." >&2
         exit 4
       fi
     }
