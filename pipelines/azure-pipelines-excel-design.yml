@@ -2,11 +2,6 @@ trigger: none
 pr: none
 
 parameters:
-- name: agentPool
-  displayName: Self-hosted agent pool
-  type: string
-  default: son-linux-pool
-
 - name: excelSecureFile
   displayName: Excel design Secure File name
   type: string
@@ -31,6 +26,21 @@ parameters:
   displayName: Allow delete/replace actions in Terraform plan
   type: boolean
   default: false
+
+- name: bootstrapTerraformBackend
+  displayName: Create or verify Terraform backend resources
+  type: boolean
+  default: true
+
+- name: grantBackendRole
+  displayName: Grant Storage Blob Data Contributor to the service connection
+  type: boolean
+  default: true
+
+- name: backendLocation
+  displayName: Terraform backend Azure region
+  type: string
+  default: koreacentral
 
 - name: applyEnvironment
   displayName: Azure DevOps Environment for approval
@@ -154,9 +164,41 @@ stages:
       displayName: Terraform init and validate
 
 - ${{ if or(eq(parameters.runTerraformPlan, true), eq(parameters.runTerraformApply, true)) }}:
+  - stage: Backend
+    displayName: Bootstrap Terraform backend
+    dependsOn: Validate
+    jobs:
+    - job: BootstrapBackend
+      displayName: Create or verify state storage
+      steps:
+      - checkout: self
+        clean: true
+
+      - task: AzureCLI@2
+        displayName: Bootstrap Terraform state backend
+        inputs:
+          azureSubscription: $(AZURE_SERVICE_CONNECTION)
+          scriptType: bash
+          scriptLocation: inlineScript
+          addSpnToEnvironment: true
+          inlineScript: |
+            set -euo pipefail
+
+            export ARM_CLIENT_ID="$servicePrincipalId"
+            export ARM_TENANT_ID="$tenantId"
+            export ARM_SUBSCRIPTION_ID="$(SUBSCRIPTION_ID)"
+            export TFSTATE_RESOURCE_GROUP="$(TFSTATE_RESOURCE_GROUP)"
+            export TFSTATE_STORAGE_ACCOUNT="$(TFSTATE_STORAGE_ACCOUNT)"
+            export TFSTATE_CONTAINER="$(TFSTATE_CONTAINER)"
+            export TFSTATE_LOCATION='${{ parameters.backendLocation }}'
+            export BOOTSTRAP_CREATE='${{ parameters.bootstrapTerraformBackend }}'
+            export GRANT_BACKEND_ROLE='${{ parameters.grantBackendRole }}'
+
+            bash tools/bootstrap_terraform_backend.sh
+
   - stage: Plan
     displayName: Terraform plan
-    dependsOn: Validate
+    dependsOn: Backend
     jobs:
     - job: TerraformPlan
       displayName: Create reviewed Terraform plans
