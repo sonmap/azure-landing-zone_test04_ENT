@@ -2,6 +2,11 @@ trigger: none
 pr: none
 
 parameters:
+- name: useSecureFile
+  displayName: Use Azure DevOps Secure File for Excel design
+  type: boolean
+  default: false
+
 - name: excelSecureFile
   displayName: Excel design Secure File name
   type: string
@@ -59,19 +64,13 @@ pool:
 
 stages:
 - stage: Generate
-  displayName: Validate Excel and generate auto tfvars
+  displayName: Prepare Excel and generate auto tfvars
   jobs:
   - job: GenerateTfvars
     displayName: Generate 10-design.auto.tfvars.json
     steps:
     - checkout: self
       clean: true
-
-    - task: DownloadSecureFile@1
-      name: designExcel
-      displayName: Download Excel design
-      inputs:
-        secureFile: ${{ parameters.excelSecureFile }}
 
     - bash: |
         set -euo pipefail
@@ -81,13 +80,39 @@ stages:
         "$(Agent.TempDirectory)/azlz-excel-venv/bin/python" -m pip install openpyxl
       displayName: Prepare Python environment
 
+    - ${{ if eq(parameters.useSecureFile, true) }}:
+      - task: DownloadSecureFile@1
+        name: designExcel
+        displayName: Download Excel design Secure File
+        inputs:
+          secureFile: ${{ parameters.excelSecureFile }}
+
+      - bash: |
+          set -euo pipefail
+          "$(Agent.TempDirectory)/azlz-excel-venv/bin/python" \
+            tools/prepare_pipeline_design_excel.py \
+            --secure-file "$(designExcel.secureFilePath)" \
+            --out "$(Agent.TempDirectory)/azure_landingzone_design.xlsx"
+        displayName: Prepare Secure File Excel design
+
+    - ${{ if eq(parameters.useSecureFile, false) }}:
+      - bash: |
+          set -euo pipefail
+          "$(Agent.TempDirectory)/azlz-excel-venv/bin/python" \
+            tools/prepare_pipeline_design_excel.py \
+            --out "$(Agent.TempDirectory)/azure_landingzone_design.xlsx"
+        displayName: Generate default Excel design with Python
+
     - bash: |
         set -euo pipefail
+        design_excel="$(Agent.TempDirectory)/azure_landingzone_design.xlsx"
+        test -f "$design_excel"
+
         rm -rf "$(Build.ArtifactStagingDirectory)/generated_tfvars"
 
         "$(Agent.TempDirectory)/azlz-excel-venv/bin/python" \
           tools/excel_design_to_auto_tfvars.py \
-          --excel "$(designExcel.secureFilePath)" \
+          --excel "$design_excel" \
           --out "$(Build.ArtifactStagingDirectory)/generated_tfvars" \
           --clean
 
