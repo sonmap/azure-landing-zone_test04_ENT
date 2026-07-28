@@ -2,9 +2,24 @@
 
 이 문서는 `pipelines/azure-pipelines-excel-design.yml`을 Azure DevOps Services에서 실행하기 위한 설정과 운영 절차를 설명합니다.
 
-파이프라인은 실제 Excel 설계서를 Git에 저장하지 않습니다. Excel은 Azure DevOps Library의 Secure Files에서 내려받고, Variable Group과 Azure Resource Manager Service Connection을 사용하여 Terraform 입력 생성, 검증, Plan, 승인 기반 Apply를 수행합니다.
+파이프라인은 Azure DevOps Secure Files의 Excel 설계서를 내려받아 Terraform root별 `10-design.auto.tfvars.json`을 만들고, 검증, Terraform Backend Bootstrap, Plan, 승인 기반 Apply를 수행합니다.
 
-## 처리 흐름
+## 핵심 설계
+
+Terraform Backend는 `live/00-foundation/resource-groups`에서 생성하지 않습니다.
+
+`00-foundation` 자체도 `terraform init`을 수행하기 전에 State Backend가 필요하므로, 같은 Terraform root에서 Backend를 생성하면 순환 의존성이 생깁니다. 따라서 Pipeline의 `Backend` Stage가 Azure CLI로 다음 리소스를 먼저 생성하거나 검증합니다.
+
+```text
+Terraform State Resource Group
+Terraform State Storage Account
+Private Blob Container
+Storage Blob Data Contributor 역할
+```
+
+Backend Bootstrap은 `tools/bootstrap_terraform_backend.sh`가 담당하며, 이미 존재하는 리소스는 다시 만들지 않습니다.
+
+## 전체 처리 흐름
 
 ```text
 Azure DevOps Secure Files
@@ -24,8 +39,15 @@ Validate Stage
   terraform validate
           |
           v
-Plan Stage
+Backend Stage
   Azure Service Connection 인증
+  Backend Resource Group 생성 또는 확인
+  Storage Account 생성 또는 확인
+  Blob Container 생성 또는 확인
+  Service Connection에 Blob Data 권한 부여 또는 확인
+          |
+          v
+Plan Stage
   Root별 Remote Backend init
   Terraform Plan 생성
   삭제/교체 작업 검사
@@ -38,33 +60,34 @@ Apply Stage
   저장된 Plan 파일 Apply
 ```
 
-`runTerraformApply`의 기본값은 `false`입니다. Apply를 활성화하더라도 `main` 브랜치가 아니면 Apply Stage는 실행되지 않습니다.
+`runTerraformPlan=false`와 `runTerraformApply=false`로 실행하면 `Generate`, `Validate`만 수행하고 Azure Backend에는 접근하지 않습니다.
 
 ## 1. Self-hosted Agent 준비
 
-기본 Agent Pool은 기존 Rocky Linux Agent Pool인 다음 값입니다.
+기본 Agent Pool:
 
 ```text
 son-linux-pool
 ```
 
-Agent 서버에서 다음 명령이 실행되어야 합니다.
+Agent 서버에 다음 도구가 설치되어 있어야 합니다.
 
 ```bash
 python3 --version
 python3 -m venv --help
 terraform version
 az version
-curl --version
+git --version
+bash --version
 ```
 
-Python의 `venv` 모듈이 없다면 Rocky Linux에서 관리자 권한으로 설치합니다.
+Rocky Linux 예:
 
 ```bash
-sudo dnf install -y python3 python3-pip
+sudo dnf install -y python3 python3-pip git
 ```
 
-Terraform과 Azure CLI는 Agent에 미리 설치하는 것을 권장합니다. Plan과 Apply 사이에 Terraform 버전이 달라지면 파이프라인은 Apply를 중지합니다.
+Terraform과 Azure CLI도 Agent에 미리 설치합니다. Plan과 Apply 사이에 Terraform 버전이 달라지면 Apply를 중지합니다.
 
 ## 2. Excel 설계서 준비
 
@@ -77,11 +100,11 @@ python .\tools\create_design_excel.py `
 
 Excel에서 Resource Group, Hub, Spoke, Subnet, VM, Disk, Generation Map을 설계한 후 저장합니다.
 
-생성된 JSON 파일은 직접 수정하지 않습니다.
+생성되는 `10-design.auto.tfvars.json`은 직접 수정하지 않습니다.
 
-## 3. Secure Files 등록
+## 3. Secure File 등록
 
-Azure DevOps에서 다음 순서로 이동합니다.
+Azure DevOps:
 
 ```text
 Pipelines
@@ -90,19 +113,17 @@ Pipelines
   > + Secure file
 ```
 
-다음 파일을 업로드합니다.
+업로드 파일:
 
 ```text
 azure_landingzone_design.xlsx
 ```
 
-업로드 후 해당 Secure File의 Pipeline permissions에서 이 파이프라인 사용을 허용합니다.
-
-파이프라인의 기본 파라미터 `excelSecureFile`은 위 파일명과 동일합니다. 다른 이름으로 등록했다면 파이프라인 실행 화면에서 실제 Secure File 이름을 입력합니다.
+업로드 후 `Pipeline permissions`에서 현재 Pipeline 사용을 허용합니다.
 
 ## 4. Variable Group 생성
 
-Azure DevOps에서 다음 위치로 이동합니다.
+Azure DevOps:
 
 ```text
 Pipelines
@@ -111,31 +132,35 @@ Pipelines
   > + Variable group
 ```
 
-Variable Group 이름은 다음과 같이 생성합니다.
+Variable Group 이름:
 
 ```text
 azlz-excel-design
 ```
 
-다음 변수를 등록합니다.
+등록 변수:
 
-| 변수 | 예시 | Secret 권장 | 용도 |
-|---|---|---:|---|
-| `TENANT_ID` | Entra Tenant GUID | Y | Terraform Provider Tenant |
-| `SUBSCRIPTION_ID` | Azure Subscription GUID | Y | 배포 대상 Subscription |
-| `SSH_PUBLIC_KEY` | `ssh-rsa AAAA...` | 선택 | Linux VM Public Key |
-| `AZURE_SERVICE_CONNECTION` | `sc-azure-land03-platform` | N | Azure RM Service Connection 이름 |
-| `TFSTATE_RESOURCE_GROUP` | `rg-sl-tfstate-krc` | N | Terraform Backend RG |
-| `TFSTATE_STORAGE_ACCOUNT` | `stslztfstate18fbfa69` | N | Terraform State Storage Account |
-| `TFSTATE_CONTAINER` | `tfstate` | N | Terraform State Container |
+| 변수 | 예시 | 설명 |
+|---|---|---|
+| `TENANT_ID` | Entra Tenant GUID | Excel Placeholder와 Terraform Provider용 |
+| `SUBSCRIPTION_ID` | Azure Subscription GUID | 배포 및 Backend 대상 Subscription |
+| `SSH_PUBLIC_KEY` | `ssh-ed25519 AAAA...` | Linux VM 공개키 |
+| `AZURE_SERVICE_CONNECTION` | `sc-azure-land03-platform` | Azure RM Service Connection 이름 |
+| `TFSTATE_RESOURCE_GROUP` | `rg-azlz-tfstate-krc` | 생성하거나 사용할 Backend RG 이름 |
+| `TFSTATE_STORAGE_ACCOUNT` | `stazlztfstate001` | 생성하거나 사용할 전역 고유 Storage Account 이름 |
+| `TFSTATE_CONTAINER` | `tfstate` | 생성하거나 사용할 Private Blob Container 이름 |
 
-Variable Group의 Pipeline permissions에서도 이 파이프라인 사용을 허용합니다.
+중요:
 
-`SSH_PUBLIC_KEY`는 공개키이므로 일반 변수로 둘 수 있습니다. Private Key, Password, Client Secret은 Excel이나 Variable Group의 일반 변수에 저장하지 않습니다.
+- `TFSTATE_RESOURCE_GROUP`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`은 **이미 존재하는 리소스 조회값이 아니라 생성할 이름**으로 먼저 등록할 수 있습니다.
+- Pipeline의 `Backend` Stage가 값에 해당하는 리소스를 생성하거나 기존 리소스를 검증합니다.
+- Storage Account 이름은 Azure 전체에서 고유해야 하며, 소문자와 숫자 3~24자로 입력합니다.
+- `SSH_PUBLIC_KEY`는 공개키입니다. Private Key는 등록하지 않습니다.
+- Variable Group의 `Pipeline permissions`에서 현재 Pipeline을 승인합니다.
 
 ## 5. Azure Service Connection 생성
 
-Azure DevOps에서 다음 위치로 이동합니다.
+Azure DevOps:
 
 ```text
 Project settings
@@ -146,24 +171,39 @@ Project settings
 
 가능하면 Workload Identity Federation 방식을 사용합니다.
 
-예시 Service Connection 이름:
+예시 이름:
 
 ```text
 sc-azure-land03-platform
 ```
 
-이 이름을 Variable Group의 `AZURE_SERVICE_CONNECTION` 값으로 등록합니다.
+이 이름을 `AZURE_SERVICE_CONNECTION`에 등록합니다.
 
-Service Connection의 서비스 주체 또는 Managed Identity에는 최소한 다음 권한이 필요합니다.
+### Backend 자동 생성에 필요한 권한
 
-- 배포 대상 Scope에 필요한 Terraform Resource 권한
-- Terraform State Storage Account에 `Storage Blob Data Contributor`
+Backend Resource Group과 Storage Account를 생성하려면 Service Connection에 대상 Subscription 또는 Resource Group의 `Contributor` 이상 권한이 필요합니다.
 
-파이프라인 전체에 Subscription Owner를 부여하는 방식은 권장하지 않습니다.
+`Storage Blob Data Contributor` 역할을 Pipeline이 자동으로 부여하려면 추가로 다음 중 하나가 필요합니다.
+
+```text
+Owner
+User Access Administrator
+Role Based Access Control Administrator
+```
+
+개인 학습 Subscription에서는 최초 Bootstrap 동안 Owner를 사용할 수 있습니다. 운영 환경에서는 별도 Bootstrap Identity를 사용하거나 보안 담당자가 Role Assignment를 사전에 수행하는 방식을 권장합니다.
+
+자동 Role Assignment를 사용하지 않을 경우 Pipeline 실행 파라미터:
+
+```text
+grantBackendRole = false
+```
+
+로 실행하고, Service Connection Identity에 `Storage Blob Data Contributor`를 사전 부여해야 합니다.
 
 ## 6. Apply 승인 Environment 생성
 
-Azure DevOps에서 다음 위치로 이동합니다.
+Azure DevOps:
 
 ```text
 Pipelines
@@ -177,7 +217,7 @@ Environment 이름:
 azlz-terraform-apply
 ```
 
-Environment를 만든 후 다음 메뉴에서 승인자를 지정합니다.
+승인 설정:
 
 ```text
 azlz-terraform-apply
@@ -185,11 +225,9 @@ azlz-terraform-apply
   > Approvals
 ```
 
-승인 설정은 YAML 파일 내부가 아니라 Azure DevOps Environment에서 관리합니다.
-
 ## 7. Pipeline 생성
 
-Azure DevOps에서 다음 순서로 생성합니다.
+Azure DevOps:
 
 ```text
 Pipelines
@@ -205,68 +243,66 @@ YAML 경로:
 /pipelines/azure-pipelines-excel-design.yml
 ```
 
-저장 후 Run pipeline을 선택합니다.
-
 ## 8. 실행 파라미터
 
 | 파라미터 | 기본값 | 설명 |
 |---|---|---|
-| `agentPool` | `son-linux-pool` | Self-hosted Agent Pool |
 | `excelSecureFile` | `azure_landingzone_design.xlsx` | Secure Files의 Excel 파일명 |
 | `selectedRoot` | `all` | Plan/Apply 대상 Root |
-| `runTerraformPlan` | `true` | Terraform Plan 수행 여부 |
-| `runTerraformApply` | `false` | 승인 후 Apply 수행 여부 |
-| `allowDestroy` | `false` | Delete/Replace 작업 허용 여부 |
+| `runTerraformPlan` | `true` | Terraform Plan 수행 |
+| `runTerraformApply` | `false` | 승인 후 Apply 수행 |
+| `allowDestroy` | `false` | Delete/Replace 작업 허용 |
+| `bootstrapTerraformBackend` | `true` | 누락된 Backend 리소스 자동 생성 |
+| `grantBackendRole` | `true` | Service Connection에 Blob Data 역할 자동 부여 |
+| `backendLocation` | `koreacentral` | Backend RG와 Storage Account 지역 |
 | `applyEnvironment` | `azlz-terraform-apply` | Apply 승인 Environment |
 
 ## 9. 검증만 실행
 
-Excel 구조와 Terraform 변수 구조만 검사할 경우:
+Azure 리소스를 만들지 않고 Excel과 Terraform 구조만 검사합니다.
 
 ```text
-runTerraformPlan  = false
-runTerraformApply = false
-selectedRoot      = all
+runTerraformPlan          = false
+runTerraformApply         = false
+selectedRoot              = all
 ```
 
-수행 단계:
+수행 Stage:
 
 ```text
 Generate
 Validate
 ```
 
-Azure 인증과 Terraform Backend 접근은 사용하지 않습니다.
+## 10. 최초 Backend Bootstrap 확인
 
-## 10. Plan 실행
-
-전체 기존 환경의 변경 Plan을 확인할 경우:
+Plan을 실행하면 `Backend` Stage가 다음 순서로 동작합니다.
 
 ```text
-runTerraformPlan  = true
-runTerraformApply = false
-selectedRoot      = all
-allowDestroy      = false
+1. Variable Group 값 검증
+2. Subscription 선택
+3. Backend Resource Group 생성 또는 확인
+4. Storage Account 생성 또는 확인
+5. Private Blob Container 생성 또는 확인
+6. Storage Blob Data Contributor 역할 확인 또는 생성
+7. Microsoft Entra 기반 Blob 접근 검증
 ```
 
-Plan Artifact에는 다음 내용이 포함됩니다.
+Backend가 이미 존재해도 같은 설정으로 재실행할 수 있습니다.
+
+리소스 자동 생성을 금지하고 존재 여부만 검증할 경우:
 
 ```text
-terraform-plans/
-  roots.txt
-  terraform-version.txt
-  <root>/tfplan
-  <root>/tfplan.txt
-  <root>/tfplan.json
+bootstrapTerraformBackend = false
 ```
 
-Terraform Plan 파일에는 민감한 값이 포함될 수 있으므로 Pipeline Artifact 접근 권한과 보존 기간을 제한해야 합니다.
+## 11. 최초 Landing Zone 구축 순서
 
-## 11. 최초 구축 실행 순서
+최초 구축에서는 `selectedRoot=all`로 한 번에 Apply하지 않습니다.
 
-최초 구축에서는 뒤쪽 Root가 아직 생성되지 않은 VNet 또는 Subnet을 Data Source로 조회할 수 있습니다. 따라서 `selectedRoot=all`로 한 번에 Apply하지 않고 다음 순서로 Root를 하나씩 실행합니다.
+Plan Stage는 모든 Root를 먼저 Plan하므로, 뒤쪽 Root가 아직 Apply되지 않은 앞쪽 리소스를 조회하면 실패할 수 있습니다.
 
-### 1단계: Foundation
+### 1차: Foundation
 
 ```text
 selectedRoot      = 00-foundation/resource-groups
@@ -274,7 +310,15 @@ runTerraformPlan  = true
 runTerraformApply = true
 ```
 
-### 2단계: Hub Platform
+생성 대상:
+
+```text
+Landing Zone Resource Groups
+```
+
+Terraform Backend는 이 Root가 아니라 앞선 `Backend` Stage에서 생성됩니다.
+
+### 2차: Hub Platform
 
 ```text
 selectedRoot      = 10-platform/hub-network
@@ -282,7 +326,7 @@ runTerraformPlan  = true
 runTerraformApply = true
 ```
 
-### 3단계: Workload Spoke
+### 3차: Workload Spoke
 
 ```text
 selectedRoot      = 20-workload/sales-dev-spoke
@@ -290,7 +334,7 @@ runTerraformPlan  = true
 runTerraformApply = true
 ```
 
-### 4단계: VM Service
+### 4차: VM Service
 
 ```text
 selectedRoot      = 30-services/vm-sales-dev
@@ -298,75 +342,97 @@ runTerraformPlan  = true
 runTerraformApply = true
 ```
 
-각 실행에서 Plan을 검토한 뒤 `azlz-terraform-apply` Environment 승인을 수행합니다.
+## 12. State Key 구조
 
-## 12. 기존 환경 전체 변경
-
-이미 Foundation, Hub, Spoke가 생성된 환경에서는 다음 값으로 전체 Plan을 확인할 수 있습니다.
+각 Root는 같은 Storage Account와 Container를 사용하되 별도 State Key를 사용합니다.
 
 ```text
-selectedRoot      = all
-runTerraformPlan  = true
-runTerraformApply = false
+00-foundation/resource-groups.tfstate
+10-platform/hub-network.tfstate
+20-workload/sales-dev-spoke.tfstate
+30-services/vm-sales-dev.tfstate
 ```
 
-전체 Plan 검토 후에도 운영 Apply는 Root별로 분리하는 것을 권장합니다. Root별 State와 장애 영향 범위를 분리할 수 있기 때문입니다.
+## 13. 주요 오류 해결
 
-## 13. 삭제 및 교체 보호
-
-기본값은 다음과 같습니다.
+### Variable Group 오류
 
 ```text
-allowDestroy = false
+Variable group was not found or is not authorized for use
 ```
 
-Terraform Plan의 Resource Change Action에 `delete`가 포함되면 파이프라인이 실패합니다. 다음 작업도 차단 대상입니다.
+확인:
 
 ```text
-Delete
-Delete + Create 형태의 Resource Replacement
+Pipelines > Library > azlz-excel-design
+Pipeline permissions > 현재 Pipeline 승인
 ```
 
-Excel 행 삭제, ID 변경, Resource Name 변경이 의도된 작업인지 확인한 후에만 다음 값을 사용합니다.
+### Secure File 오류
 
 ```text
-allowDestroy = true
+secure file could not be found or is not authorized
 ```
 
-`allowDestroy=true`는 삭제를 자동 승인하는 기능이 아닙니다. Plan 생성을 허용하는 기능이며, 실제 Apply는 별도의 Environment 승인이 필요합니다.
-
-## 14. GitHub 브랜치 정책
-
-Apply Stage는 다음 조건을 모두 만족해야 실행됩니다.
+확인:
 
 ```text
-runTerraformApply = true
-Build.SourceBranch = refs/heads/main
-앞 단계 성공
-Environment 승인 완료
+Pipelines > Library > Secure files
+azure_landingzone_design.xlsx
+Pipeline permissions > 현재 Pipeline 승인
 ```
 
-Feature Branch와 Pull Request Branch에서는 Generate, Validate, Plan까지만 사용합니다.
-
-## 15. Azure DevOps Server 사용 시
-
-이 YAML은 Azure DevOps Services의 Pipeline Artifact를 사용합니다.
-
-Azure DevOps Server에서 `PublishPipelineArtifact@1`을 지원하지 않는 버전을 사용한다면 다음 Task로 변경해야 합니다.
+### Role Assignment 오류
 
 ```text
-PublishBuildArtifacts@1
-DownloadBuildArtifacts@1
+The client does not have authorization to perform roleAssignments/write
 ```
 
-Secure Files, Service Connection, Environment Approval 지원 여부도 사용하는 Azure DevOps Server 버전에 맞춰 확인해야 합니다.
+원인:
 
-## 16. 운영 권장사항
+```text
+Service Connection에 Role Assignment 생성 권한이 없음
+```
 
-- Excel 변경 이력은 SharePoint, OneDrive 또는 승인된 문서 저장소에서 관리합니다.
-- Secure Files에는 승인된 최신 Excel만 업로드합니다.
-- Excel 업로드 담당자와 Terraform Apply 승인자를 분리합니다.
-- Variable Group, Secure File, Service Connection은 필요한 Pipeline에만 권한을 부여합니다.
-- Terraform State Storage는 Public Network를 제한하고 Azure AD 인증을 사용합니다.
-- `allowDestroy=true` 실행은 변경 요청 번호와 승인 근거를 남깁니다.
-- 운영 Apply는 Root 하나씩 실행합니다.
+해결:
+
+```text
+Service Connection에 Owner/User Access Administrator/RBAC Administrator 부여
+```
+
+또는:
+
+```text
+grantBackendRole=false
+```
+
+로 실행하고 역할을 사전 등록합니다.
+
+### Storage Account 이름 오류
+
+```text
+StorageAccountAlreadyTaken
+```
+
+`TFSTATE_STORAGE_ACCOUNT`를 다른 전역 고유 이름으로 변경합니다.
+
+### Backend Blob 접근 오류
+
+```text
+AuthorizationPermissionMismatch
+```
+
+Service Connection Identity에 Storage Account Scope의 다음 역할을 확인합니다.
+
+```text
+Storage Blob Data Contributor
+```
+
+## 관련 파일
+
+```text
+pipelines/azure-pipelines-excel-design.yml
+tools/bootstrap_terraform_backend.sh
+tools/excel_design_to_auto_tfvars.py
+tools/create_design_excel.py
+```
